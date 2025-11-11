@@ -3,96 +3,101 @@ const axios = require("axios");
 const cors = require("cors");
 const admin = require("firebase-admin");
 
-const router = express.Router();
+const router = express.Router(); 
 router.use(cors());
+
+const serviceAccount = require("../barterhub-3c947-firebase-adminsdk-fbsvc-7e878a2f3f.json");
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
+    credential: admin.credential.cert(serviceAccount),
     databaseURL: "https://barterhub-3c947-default-rtdb.firebaseio.com"
   });
 }
 
-router.post("/", async (req, res) => {
-  const { amount, paymentMethod, userId, coins, currency } = req.body;
-
-  try {
-    const response = await axios.post(
-      "https://api.paymongo.com/v1/checkout_sessions",
-      {
-        data: {
-          attributes: {
-            amount,
-            payment_method_types: ["gcash", "grab_pay"],
-            description: `Buy ${coins} Coins - BarterHub PH`,
-            line_items: [
-              {
-                amount,
-                currency,
-                name: "Coins Purchase",
-                quantity: 1
-              }
-            ],
-            metadata: { userId, coins }
-          }
-        }
-      },
-      {
-        auth: { username: process.env.PAYMONGO_SECRET, password: "" }
-      }
-    );
-
-    return res.json({
-      checkout_url: response.data.data.attributes.checkout_url
-    });
-
-  } catch (err) {
-    console.error(err.response?.data ?? err);
-    res.status(500).json({ error: err.toString() });
-  }
-});
-
-router.post("/webhook", async (req, res) => {
-  console.log("🔄 Webhook received - Full body:", JSON.stringify(req.body, null, 2));
-  
+// Webhook route (PayMongo) - UPDATED VERSION
+router.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const crypto = require("crypto");
+  const rawBody = req.body.toString();
   const signature = req.headers["paymongo-signature"];
+
+  console.log("🔄 Webhook received - Raw body:", rawBody);
   console.log("Signature:", signature);
+
+  const webhookSecret = process.env.PAYMONGO_WEBHOOK_SECRET;
   
-  if (signature !== process.env.WEBHOOK_SECRET) {
-    console.log("❌ Webhook secret mismatch");
+  console.log(`🔍 Webhook verification details:`);
+  console.log(`- Webhook Secret: ${webhookSecret ? 'SET' : 'NOT SET'}`);
+
+  if (!signature) {
+    console.log('❌ No signature provided');
     return res.status(401).send("Unauthorized");
   }
 
+  if (!webhookSecret) {
+    console.log('❌ Webhook secret not configured');
+    return res.status(500).send("Webhook secret not configured");
+  }
+
+  // Parse the signature (new PayMongo format)
+  const signatureParts = signature.split(',');
+  const timestamp = signatureParts.find(part => part.startsWith('t='))?.split('=')[1];
+  const receivedSignature = signatureParts.find(part => part.startsWith('te='))?.split('=')[1];
+  
+  if (!timestamp || !receivedSignature) {
+    console.log('❌ Invalid signature format');
+    return res.status(401).send("Unauthorized");
+  }
+
+  // Verify the signature
+  const payload = `${timestamp}.${rawBody}`;
+  const expectedSignature = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(payload)
+    .digest('hex');
+
+  console.log(`🔐 Signature verification:`);
+  console.log(`- Received: ${receivedSignature}`);
+  console.log(`- Expected: ${expectedSignature}`);
+
+  if (receivedSignature !== expectedSignature) {
+    console.log('❌ Webhook signature mismatch');
+    return res.status(401).send("Unauthorized");
+  }
+
+  console.log('✅ Webhook verified successfully');
+
+  let payload;
   try {
-    // DEBUG: Check the actual structure
-    console.log("📦 Body keys:", Object.keys(req.body));
+    payload = JSON.parse(rawBody);
+  } catch (err) {
+    console.error("❌ Invalid JSON payload:", err);
+    return res.status(400).send("Invalid JSON");
+  }
+
+  try {
+    const data = payload.data;
+    const payment = data.attributes;
+
+    // Extract from nested structure for payment.paid events
+    let userId, coins, amount;
     
-    let payload, payment;
-    
-    // Handle different payload structures
-    if (req.body.data) {
-      payload = req.body.data;
-      payment = payload.attributes;
-      console.log("✅ Using data.attributes structure");
-    } else if (req.body.attributes) {
-      payment = req.body.attributes;
-      console.log("✅ Using direct attributes structure");
+    if (data.attributes.type === 'payment.paid') {
+      // For payment.paid events, data is nested
+      userId = data.attributes.data.attributes.metadata?.userId;
+      coins = parseInt(data.attributes.data.attributes.metadata?.coins || 0);
+      amount = data.attributes.data.attributes.amount ? data.attributes.data.attributes.amount / 100 : 0;
     } else {
-      console.log("❓ Unknown payload structure:", req.body);
-      return res.status(400).send("Invalid payload structure");
+      // For other event types
+      userId = payment.metadata?.userId;
+      coins = parseInt(payment.metadata?.coins || 0);
+      amount = payment.amount ? payment.amount / 100 : 0;
     }
 
-    console.log("🎯 Payment object:", payment);
+    console.log(`🎯 Event: ${data.attributes.type}`);
+    console.log(`🎯 User: ${userId}, Coins: ${coins}, Amount: ${amount}`);
 
-    const userId = payment.metadata?.userId;
-    const coins = parseInt(payment.metadata?.coins || 0);
-    const amount = payment.amount ? payment.amount / 100 : 0;
-
-    console.log(`👤 User: ${userId}, Coins: ${coins}, Amount: ${amount}`);
-
-    // Only process if payment is PAID and has valid data
-    if (payment.status === "paid" && userId && coins > 0) {
-      
+    if (data.attributes.type === "payment.paid" && userId && coins > 0) {
       // 1️⃣ Update user coins
       await admin.database().ref(`users/${userId}/coins`)
         .transaction(current => (current || 0) + coins);
@@ -122,8 +127,8 @@ router.post("/webhook", async (req, res) => {
       console.log(`✅ Payment completed: ${coins} coins for user ${userId}`);
       return res.status(200).json({ success: true, message: "Coins added" });
     } else {
-      console.log("⏩ Payment not processed - Status:", payment.status, "User:", userId);
-      return res.status(200).json({ success: true, message: "Payment ignored" });
+      console.log("⏩ Event ignored - Type:", data.attributes.type);
+      return res.status(200).json({ success: true, message: "Event ignored" });
     }
 
   } catch (error) {
