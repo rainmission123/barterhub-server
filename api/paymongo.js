@@ -15,7 +15,7 @@ if (!admin.apps.length) {
   });
 }
 
-// Webhook route (PayMongo) - UPDATED VERSION
+// Webhook route (PayMongo) - FIXED VERSION
 router.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const crypto = require("crypto");
   const rawBody = req.body.toString();
@@ -67,16 +67,16 @@ router.post("/webhook", express.raw({ type: "application/json" }), async (req, r
 
   console.log('✅ Webhook verified successfully');
 
-  let payload;
+  let webhookPayload; // CHANGED: renamed to avoid conflict
   try {
-    payload = JSON.parse(rawBody);
+    webhookPayload = JSON.parse(rawBody); // CHANGED: use different variable name
   } catch (err) {
     console.error("❌ Invalid JSON payload:", err);
     return res.status(400).send("Invalid JSON");
   }
 
   try {
-    const data = payload.data;
+    const data = webhookPayload.data; // CHANGED: use webhookPayload instead of payload
     const payment = data.attributes;
 
     // Extract from nested structure for payment.paid events
@@ -136,5 +136,4 @@ router.post("/webhook", express.raw({ type: "application/json" }), async (req, r
     return res.status(500).send("Error processing payment");
   }
 });
-
 module.exports = router;
