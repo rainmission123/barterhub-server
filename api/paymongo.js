@@ -1,7 +1,7 @@
-import express from "express";
-import axios from "axios";
-import cors from "cors";
-import admin from "firebase-admin";
+const express = require("express");
+const axios = require("axios");
+const cors = require("cors");
+const admin = require("firebase-admin");
 
 const router = express.Router();
 router.use(cors());
@@ -67,4 +67,4 @@ router.post("/webhook", async (req, res) => {
   return res.status(200).send("Coins credited");
 });
 
-export default router;
+module.exports = router;
