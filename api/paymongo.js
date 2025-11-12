@@ -6,9 +6,13 @@ const admin = require("firebase-admin");
 const router = express.Router(); 
 router.use(cors());
 
-const serviceAccount = require("../barterhub-3c947-firebase-adminsdk-fbsvc-7e878a2f3f.json");
+const fs = require("fs");
 
 if (!admin.apps.length) {
+  const serviceAccount = JSON.parse(
+    fs.readFileSync("/etc/secrets/firebase-service-account.json", "utf8")
+  );
+
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL: "https://barterhub-3c947-default-rtdb.firebaseio.com"
