@@ -19,7 +19,64 @@ if (!admin.apps.length) {
   });
 }
 
-// Webhook route (PayMongo) - FIXED VERSION
+// ✅ CHECKOUT ROUTE - ITO ANG NAWAWALA!
+router.post("/", express.json(), async (req, res) => {
+  const { amount, paymentMethod, userId, coins, currency } = req.body;
+
+  console.log("🛒 Creating checkout session:", { amount, userId, coins });
+
+  // Quick validation
+  if (!amount || !userId || !coins) {
+    return res.status(400).json({ 
+      error: "Missing required fields: amount, userId, coins" 
+    });
+  }
+
+  try {
+    const response = await axios.post(
+      "https://api.paymongo.com/v1/checkout_sessions",
+      {
+        data: {
+          attributes: {
+            amount: amount,
+            payment_method_types: ["gcash", "grab_pay"],
+            description: `Buy ${coins} Coins - BarterHub PH`,
+            line_items: [
+              {
+                amount: amount,
+                currency: currency || "PHP",
+                name: "Coins Purchase",
+                quantity: 1
+              }
+            ],
+            metadata: { userId, coins }
+          }
+        }
+      },
+      {
+        auth: { 
+          username: process.env.PAYMONGO_SECRET, 
+          password: "" 
+        },
+        timeout: 30000
+      }
+    );
+
+    console.log("✅ Checkout session created");
+    return res.json({
+      checkout_url: response.data.data.attributes.checkout_url
+    });
+
+  } catch (err) {
+    console.error("❌ PayMongo API error:", err.response?.data ?? err.message);
+    res.status(500).json({ 
+      error: "Payment gateway error",
+      details: err.message 
+    });
+  }
+});
+
+// ✅ WEBHOOK ROUTE - FIXED VERSION
 router.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const crypto = require("crypto");
   const rawBody = req.body.toString();
@@ -71,16 +128,16 @@ router.post("/webhook", express.raw({ type: "application/json" }), async (req, r
 
   console.log('✅ Webhook verified successfully');
 
-  let webhookPayload; // CHANGED: renamed to avoid conflict
+  let webhookPayload;
   try {
-    webhookPayload = JSON.parse(rawBody); // CHANGED: use different variable name
+    webhookPayload = JSON.parse(rawBody);
   } catch (err) {
     console.error("❌ Invalid JSON payload:", err);
     return res.status(400).send("Invalid JSON");
   }
 
   try {
-    const data = webhookPayload.data; // CHANGED: use webhookPayload instead of payload
+    const data = webhookPayload.data;
     const payment = data.attributes;
 
     // Extract from nested structure for payment.paid events
@@ -140,4 +197,5 @@ router.post("/webhook", express.raw({ type: "application/json" }), async (req, r
     return res.status(500).send("Error processing payment");
   }
 });
+
 module.exports = router;
