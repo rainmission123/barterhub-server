@@ -19,7 +19,7 @@ if (!admin.apps.length) {
   });
 }
 
-// ✅ CHECKOUT ROUTE - ITO ANG NAWAWALA!
+// ✅ CHECKOUT ROUTE
 router.post("/", express.json(), async (req, res) => {
   const { amount, paymentMethod, userId, coins, currency } = req.body;
 
@@ -76,7 +76,74 @@ router.post("/", express.json(), async (req, res) => {
   }
 });
 
-// ✅ WEBHOOK ROUTE - FIXED VERSION
+// ✅ MANUAL COIN ADD ROUTE (NEW)
+router.post("/manual-add-coins", express.json(), async (req, res) => {
+  const { userId, coins } = req.body;
+  
+  console.log(`🔄 Manual coin add: ${coins} coins for user ${userId}`);
+  
+  if (!userId || !coins) {
+    return res.status(400).json({ error: "Missing userId or coins" });
+  }
+
+  try {
+    // 1️⃣ Update user coins
+    const userRef = admin.database().ref(`users/${userId}/coins`);
+    const currentSnapshot = await userRef.once('value');
+    const currentCoins = currentSnapshot.val() || 0;
+    const newCoins = currentCoins + parseInt(coins);
+    
+    await userRef.set(newCoins);
+
+    // 2️⃣ Record coin transaction
+    await admin.database().ref(`coin_transactions/${userId}`).push({
+      coins: parseInt(coins),
+      amount: parseInt(coins) * 100, // Assuming 1 coin = ₱1.00
+      type: "manual_add",
+      status: "completed",
+      paymentMethod: "manual",
+      timestamp: Date.now()
+    });
+
+    console.log(`✅ Manual coins added: ${coins} coins to user ${userId}`);
+    console.log(`💰 Coin balance: ${currentCoins} → ${newCoins}`);
+    
+    res.json({ 
+      success: true, 
+      message: `${coins} coins added successfully`,
+      previous_balance: currentCoins,
+      new_balance: newCoins
+    });
+    
+  } catch (error) {
+    console.error("❌ Manual coins error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ CHECK COINS ROUTE (NEW)
+router.get("/check-coins/:userId", async (req, res) => {
+  const userId = req.params.userId;
+  
+  try {
+    const userRef = admin.database().ref(`users/${userId}`);
+    const snapshot = await userRef.once('value');
+    const userData = snapshot.val();
+    
+    console.log("💰 Current coins for user:", userId, userData?.coins);
+    
+    res.json({ 
+      userId: userId,
+      coins: userData?.coins || 0,
+      userData: userData
+    });
+  } catch (error) {
+    console.error("Check coins error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ WEBHOOK ROUTE
 router.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const crypto = require("crypto");
   const rawBody = req.body.toString();
